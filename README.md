@@ -1,2 +1,3 @@
-# oracle-db-ops
-Oracle DB Operations (scripts)
+# Oracle DB Operations scripts
+
+<2do!>
