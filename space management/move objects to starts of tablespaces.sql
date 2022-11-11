@@ -38,7 +38,15 @@ detect_all$ as (
         L.column_name as lob_column,
         LP.partition_name as lob_table_partition,
         LS.subpartition_name as lob_table_subpartition,
-        row_number() over (order by last_block_id desc) as row#,
+        row_number() over (
+            order by case
+                when I.index_type = 'IOT - TOP' then 2
+                when S.segment_type like 'INDEX%' then 9
+                when S.segment_type like 'LOB%' then 5
+                else 1
+            end asc,
+            S.size_mb asc
+        ) as row#,
         count(1) over () as rows_total#
     from segs$ S
         left join dba_indexes I
@@ -114,13 +122,6 @@ select X.*,
                 || ' lob ('||safe_enquote(X.lob_column)||') store as (tablespace '||safe_enquote(X.tablespace_name)||')'
         else
             '-- WARNING: Dunno how to move '||lower(X.segment_type)||' "'||X.owner||'"."'||X.segment_name||'"'
-    end||';' as sql$move
+    end||'; -- '||X.row#||'/'||X.rows_total# as sql$move
 from detect_all$ X
-order by
-    case
-        when X.index_type = 'IOT - TOP' then 2
-        when X.segment_type like 'INDEX%' then 9
-        when X.segment_type like 'LOB%' then 5
-        else 1
-    end asc,
-    X.last_block_id desc
+order by row#
