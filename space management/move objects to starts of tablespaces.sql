@@ -1,3 +1,11 @@
+/* notes:
+ - tables with LONG columns cannot be moved
+ - online index rebuild (hypothesis) keeps former index statistics intact, but (fact) updates .LAST_ANALYZED timestamp
+ - online table move (hypothesis) keeps indexes valid, just (fact) updates .LAST_ANALYZED timestamp
+ - (fact) online table move does not work on tables with domain indexes; only offline move
+ - tablespaces ideally are autoextensible, because objects sometimes get moved to an end of tbs; otherwise "ORA-01652: unable to extend temp segment by $1 in tablespace $2" gets thrown
+ - occasionally, moving tables with RAW(2000), VARCHAR2(4000 byte) columns may throw "ORA-14691: Extended character types are not allowed in this table"; this is clearly a bug (checked on 19.16)
+*/
 with
     function safe_enquote(i_name in dbms_id) return dbms_id is
     begin
