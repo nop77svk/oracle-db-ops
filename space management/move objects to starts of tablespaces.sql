@@ -5,6 +5,33 @@
  - (fact) online table move does not work on tables with domain indexes; only offline move
  - tablespaces ideally are autoextensible, because objects sometimes get moved to an end of tbs; otherwise "ORA-01652: unable to extend temp segment by $1 in tablespace $2" gets thrown
  - occasionally, moving tables with RAW(2000), VARCHAR2(4000 byte) columns may throw "ORA-14691: Extended character types are not allowed in this table"; this is clearly a bug (checked on 19.16)
+ - DON'T FORGET to purge recyclebin prior to moving objects!
+
+****************************************************************************************************
+prepare phase:
+
+with xyz as (
+    select X.*,
+        bytes / blocks as block_size_b,
+        regexp_replace(file_name, '[^/\]+$', null) as data_file_path,
+        row_number() over (partition by tablespace_name order by file_id desc) as row$
+    from dba_data_files X
+    where tablespace_name not in ('SYSTEM','SYSAUX','TEMP','USERS')
+        and tablespace_name not like 'UNDO%'
+)
+select X.*,
+    'create smallfile tablespace "'||tablespace_name||'$N_'||to_char(sysdate, 'yyyymmdd_hh24')||'"'
+        || ' datafile '''||data_file_path||lower(tablespace_name)||'.'||to_char(sysdate, 'yyyymmdd_hh24')||'.dbf'''
+        || ' size '||round(increment_by * block_size_b / 1048576)||'m'
+        || case when autoextensible = 'YES' then ' autoextend on next '||round(increment_by * block_size_b / 1048576)||'m maxsize '||ceil(maxblocks * block_size_b / 1048576 / 1024)||'g;' end
+        as sql$01_tbs_create,
+    'alter tablespace "'||tablespace_name||'" rename to "'||tablespace_name||'$O_'||to_char(sysdate, 'yyyymmdd_hh24')||'";' as sql$98_rename_old_to_backup,
+    'alter tablespace "'||tablespace_name||'$N_'||to_char(sysdate, 'yyyymmdd_hh24')||'" rename to "'||tablespace_name||'";' as sql$99_rename_new_to_old
+from xyz X
+where row$ <= 1
+    and tablespace_name = 'OWSTATLARGE_D'
+;
+
 */
 with
     function safe_enquote(i_name in dbms_id) return dbms_id is
@@ -29,7 +56,8 @@ segs$ as (
     where tablespace_name not in ('SYSTEM','SYSAUX','TEMP','USERS')
         and owner not in ('XDB','SH','OE','IX','HR','PIERRE')
         and tablespace_name not like 'UNDO%'
---        and tablespace_name in (...) -- [in] list of tablespaces to be considered
+        -- [in] list of tablespaces to be considered...
+--        and tablespace_name = 'OWSTATLARGE_D'
     group by owner, segment_name, partition_name, segment_type, tablespace_name
 ),
 detect_all$ as (
@@ -37,15 +65,21 @@ detect_all$ as (
         I.index_type,
         I.table_owner as index_table_owner,
         I.table_name as index_table,
+--        I.tablespace_name as index_tbs,
         NT.parent_table_name as nested_table_table,
         NT.parent_table_column as nested_table_column,
+--        S.tablespace_name as nested_table_tbs,
         V.parent_table_name as varray_table,
         V.parent_table_column as varray_column,
+--        S.tablespace_name as varray_tbs,
         L.owner as lob_table_owner,
         L.table_name as lob_table,
         L.column_name as lob_column,
+--        L.tablespace_name as lob_tbs,
         LP.partition_name as lob_table_partition,
+--        LP.tablespace_name as lob_part_tbs,
         LS.subpartition_name as lob_table_subpartition,
+--        LS.tablespace_name as lob_subpart_tbs,
         row_number() over (
             order by case
                 when I.index_type = 'IOT - TOP' then 2
@@ -82,54 +116,104 @@ detect_all$ as (
             on NT.owner = S.owner
             and NT.table_name = S.segment_name
     where lnnvl(I.index_type = 'LOB')
+),
+sql_templates$ as (
+    select
+        X.*,
+        case
+            when X.segment_type = 'TABLE' and X.partition_name is null then
+                'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move'
+                    || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+            when X.segment_type = 'NESTED TABLE' then
+                'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move'
+                    || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+            when X.segment_type = 'INDEX' and X.index_type = 'IOT - TOP' then
+                'alter table '||safe_enquote(X.index_table_owner)||'.'||safe_enquote(X.index_table)||' move'
+                    || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+            when X.segment_type = 'TABLE PARTITION' then
+                'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move partition '||safe_enquote(X.partition_name)
+                    || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+            when X.segment_type = 'TABLE SUBPARTITION' then
+                'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move subpartition '||safe_enquote(X.partition_name)
+                    || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+            when X.segment_type = 'INDEX' and X.partition_name is null then
+                'alter index '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' rebuild'
+                    || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                    || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when lower('&compute_statistics') in ('y','yes','true','t','1') then ' compute statistics' end
+            when X.segment_type = 'INDEX PARTITION' then
+                'alter index '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' rebuild partition '||safe_enquote(X.partition_name)
+                    || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                    || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when lower('&compute_statistics') in ('y','yes','true','t','1') then ' compute statistics' end
+            when X.segment_type = 'INDEX SUBPARTITION' then
+                'alter index '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' rebuild subpartition '||safe_enquote(X.partition_name)
+                    || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                    || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when lower('&compute_statistics') in ('y','yes','true','t','1') then ' compute statistics' end
+            when X.segment_type = 'LOBSEGMENT' and X.varray_table is not null then
+                'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move'
+                    || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                    || ' varray '||safe_enquote(X.lob_column)||' store as lob '||safe_enquote(X.segment_name)||' (tablespace ${tablespace})'
+            when X.segment_type = 'LOBSEGMENT' then
+                'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move'
+                    || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                    || ' lob ('||safe_enquote(X.lob_column)||') store as '||safe_enquote(X.segment_name)||' (tablespace ${tablespace})'
+            when X.segment_type = 'LOB PARTITION' then
+                'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move partition '||safe_enquote(X.lob_table_partition)
+                    || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                    || ' lob ('||safe_enquote(X.lob_column)||') store as (tablespace ${tablespace})'
+            when X.segment_type = 'LOB SUBPARTITION' then
+                'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move subpartition '||safe_enquote(X.lob_table_subpartition)
+                    || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                    || ' lob ('||safe_enquote(X.lob_column)||') store as (tablespace ${tablespace})'
+            else
+                '-- WARNING: Dunno how to move '||lower(X.segment_type)||' "'||X.owner||'"."'||X.segment_name||'"'
+        end as sql$move
+    from detect_all$ X
+),
+sqls$ as (
+    select
+        '10:'||ora_hash(tablespace_name)||':01:move to transient' as block$,
+        row_number() over (partition by tablespace_name order by row# desc) as cmd#,
+        replace(sql$move, '${tablespace}', safe_enquote('&transientTablespaceName'))||';' as sql$
+    from sql_templates$ A
+    where sql$move is not null
+        and '&transientTablespaceName' is not null
+    --
+    union all
+    --
+    select
+        '10:'||ora_hash(tablespace_name)||':02:move back to persistent' as block$,
+        row_number() over (partition by tablespace_name order by row# asc) as cmd#,
+        replace(sql$move, '${tablespace}', safe_enquote(B.tablespace_name))||';' as sql$
+    from sql_templates$ B
+    where sql$move is not null
+    --
+    union all
+    --
+    select
+        '01:grant quota on transient' as block$,
+        row_number() over (order by C.owner asc) as cmd#,
+        'alter user '||safe_enquote(C.owner)||' quota unlimited on '||safe_enquote('&transientTablespaceName')||';' as sql$
+    from (select unique owner from segs$) C
+    where '&transientTablespaceName' is not null
+    --
+    union all
+    --
+    select
+        '91:revoke quota on transient' as block$,
+        row_number() over (order by C.owner desc) as cmd#,
+        'alter user '||safe_enquote(C.owner)||' quota 0 on '||safe_enquote('&transientTablespaceName')||';' as sql$
+    from (select unique owner from segs$) C
+    where '&transientTablespaceName' is not null
 )
-select X.*,
-    case
-        when X.segment_type = 'TABLE' and X.partition_name is null then
-            'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move'
-                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
-        when X.segment_type = 'NESTED TABLE' then
-            'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move'
-                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
-        when X.segment_type = 'INDEX' and X.index_type = 'IOT - TOP' then
-            'alter table '||safe_enquote(X.index_table_owner)||'.'||safe_enquote(X.index_table)||' move'
-                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
-        when X.segment_type = 'TABLE PARTITION' then
-            'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move partition '||safe_enquote(X.partition_name)
-                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
-        when X.segment_type = 'TABLE SUBPARTITION' then
-            'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move subpartition '||safe_enquote(X.partition_name)
-                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
-        when X.segment_type = 'INDEX' and X.partition_name is null then
-            'alter index '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' rebuild'
-                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
-                || case when lower('&compute_statistics') in ('y','yes','true','t','1') then ' compute statistics' end
-        when X.segment_type = 'INDEX PARTITION' then
-            'alter index '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' rebuild partition '||safe_enquote(X.partition_name)
-                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
-                || case when lower('&compute_statistics') in ('y','yes','true','t','1') then ' compute statistics' end
-        when X.segment_type = 'INDEX SUBPARTITION' then
-            'alter index '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' rebuild subpartition '||safe_enquote(X.partition_name)
-                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
-                || case when lower('&compute_statistics') in ('y','yes','true','t','1') then ' compute statistics' end
-        when X.segment_type = 'LOBSEGMENT' and X.varray_table is not null then
-            'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move'
-                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
-                || ' varray '||safe_enquote(X.lob_column)||' store as lob '||safe_enquote(X.segment_name)||' (tablespace '||safe_enquote(X.tablespace_name)||')'
-        when X.segment_type = 'LOBSEGMENT' then
-            'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move'
-                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
-                || ' lob ('||safe_enquote(X.lob_column)||') store as '||safe_enquote(X.segment_name)||' (tablespace '||safe_enquote(X.tablespace_name)||')'
-        when X.segment_type = 'LOB PARTITION' then
-            'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move partition '||safe_enquote(X.lob_table_partition)
-                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
-                || ' lob ('||safe_enquote(X.lob_column)||') store as (tablespace '||safe_enquote(X.tablespace_name)||')'
-        when X.segment_type = 'LOB SUBPARTITION' then
-            'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move subpartition '||safe_enquote(X.lob_table_subpartition)
-                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
-                || ' lob ('||safe_enquote(X.lob_column)||') store as (tablespace '||safe_enquote(X.tablespace_name)||')'
-        else
-            '-- WARNING: Dunno how to move '||lower(X.segment_type)||' "'||X.owner||'"."'||X.segment_name||'"'
-    end||'; -- '||X.row#||'/'||X.rows_total# as sql$move
-from detect_all$ X
-order by row#
+select block$, cmd#, X.sql$||' -- '||row_number() over (order by block$, cmd#)||'/'||count(1) over ()
+from sqls$ X
+order by block$, cmd#
+
