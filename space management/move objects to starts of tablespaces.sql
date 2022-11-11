@@ -1,9 +1,26 @@
-with segs$ as (
+with
+    function safe_enquote(i_name in dbms_id) return dbms_id is
+    begin
+        if regexp_like(i_name, '^"[^"]+"(\."[^"]+")*$') then
+            return i_name;
+        elsif i_name = upper(i_name) then
+            return sys.dbms_assert.simple_sql_name(lower(i_name));
+        else
+            return sys.dbms_assert.simple_sql_name('"'||i_name||'"');
+        end if;
+    exception
+        when others then
+            raise_application_error(-20990, '$.safe_enquote('||i_name||') error', true);
+    end;
+----------------------------------------------------------------------------------------------------
+segs$ as (
     select owner, segment_name, partition_name, segment_type, tablespace_name,
         max(block_id) as last_block_id,
         sum(bytes)/1048576 as size_mb
     from dba_extents
-    where tablespace_name not in ('SYSTEM','SYSAUX')
+    where tablespace_name not in ('SYSTEM','SYSAUX','TEMP','USERS')
+        and owner not in ('XDB','SH','OE','IX','HR','PIERRE')
+        and tablespace_name not like 'UNDO%'
 --        and tablespace_name in (...) -- [in] list of tablespaces to be considered
     group by owner, segment_name, partition_name, segment_type, tablespace_name
 ),
@@ -37,7 +54,7 @@ detect_all$ as (
             on LP.table_owner = L.owner
             and LP.table_name = L.table_name
             and LP.column_name = L.column_name
-            and LP.lob_name = L.segment_name
+           and LP.lob_name = L.segment_name
             and LP.lob_partition_name = S.partition_name
         left join dba_lob_subpartitions LS
             on LS.table_owner = L.owner
@@ -53,29 +70,48 @@ detect_all$ as (
 select X.*,
     case
         when X.segment_type = 'TABLE' and X.partition_name is null then
-            'alter table '||sys.dbms_assert.enquote_name(X.owner)||'.'||sys.dbms_assert.enquote_name(X.segment_name)||' move&<name = "online?" checkbox = " online," default = "">'
+            'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move'
+                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
         when X.segment_type = 'NESTED TABLE' then
-            'alter table '||sys.dbms_assert.enquote_name(X.owner)||'.'||sys.dbms_assert.enquote_name(X.segment_name)||' move&<name = "online?" checkbox = " online," default = "">'
+            'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move'
+                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
         when X.segment_type = 'INDEX' and X.index_type = 'IOT - TOP' then
-            'alter table '||sys.dbms_assert.enquote_name(X.index_table_owner)||'.'||sys.dbms_assert.enquote_name(X.index_table)||' move&<name = "online?" checkbox = " online," default = "">'
+            'alter table '||safe_enquote(X.index_table_owner)||'.'||safe_enquote(X.index_table)||' move'
+                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
         when X.segment_type = 'TABLE PARTITION' then
-            'alter table '||sys.dbms_assert.enquote_name(X.owner)||'.'||sys.dbms_assert.enquote_name(X.segment_name)||' move partition '||sys.dbms_assert.enquote_name(X.partition_name)||'&<name = "online?" checkbox = " online," default = "">'
+            'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move partition '||safe_enquote(X.partition_name)
+                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
         when X.segment_type = 'TABLE SUBPARTITION' then
-            'alter table '||sys.dbms_assert.enquote_name(X.owner)||'.'||sys.dbms_assert.enquote_name(X.segment_name)||' move subpartition '||sys.dbms_assert.enquote_name(X.partition_name)||'&<name = "online?" checkbox = " online," default = "">'
+            'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move subpartition '||safe_enquote(X.partition_name)
+                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
         when X.segment_type = 'INDEX' and X.partition_name is null then
-            'alter index '||sys.dbms_assert.enquote_name(X.owner)||'.'||sys.dbms_assert.enquote_name(X.segment_name)||' rebuild&<name = "online?" checkbox = " online," default = "">&<name = "compute statistics?" checkbox = " compute statistics," default = "">'
+            'alter index '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' rebuild'
+                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                || case when lower('&compute_statistics') in ('y','yes','true','t','1') then ' compute statistics' end
         when X.segment_type = 'INDEX PARTITION' then
-            'alter index '||sys.dbms_assert.enquote_name(X.owner)||'.'||sys.dbms_assert.enquote_name(X.segment_name)||' rebuild partition '||sys.dbms_assert.enquote_name(X.partition_name)||'&<name = "online?" checkbox = " online," default = "">&<name = "compute statistics?" checkbox = " compute statistics," default = "">'
+            'alter index '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' rebuild partition '||safe_enquote(X.partition_name)
+                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                || case when lower('&compute_statistics') in ('y','yes','true','t','1') then ' compute statistics' end
         when X.segment_type = 'INDEX SUBPARTITION' then
-            'alter index '||sys.dbms_assert.enquote_name(X.owner)||'.'||sys.dbms_assert.enquote_name(X.segment_name)||' rebuild subpartition '||sys.dbms_assert.enquote_name(X.partition_name)||'&<name = "online?" checkbox = " online," default = "">&<name = "compute statistics?" checkbox = " compute statistics," default = "">'
+            'alter index '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' rebuild subpartition '||safe_enquote(X.partition_name)
+                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                || case when lower('&compute_statistics') in ('y','yes','true','t','1') then ' compute statistics' end
         when X.segment_type = 'LOBSEGMENT' and X.varray_table is not null then
-            'alter table '||sys.dbms_assert.enquote_name(X.lob_table_owner)||'.'||sys.dbms_assert.enquote_name(X.lob_table)||' move&<name = "online?" checkbox = " online," default = ""> varray '||X.lob_column||' store as lob '||sys.dbms_assert.enquote_name(X.segment_name)||' (tablespace '||X.tablespace_name||')'
+            'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move'
+                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                || ' varray '||safe_enquote(X.lob_column)||' store as lob '||safe_enquote(X.segment_name)||' (tablespace '||safe_enquote(X.tablespace_name)||')'
         when X.segment_type = 'LOBSEGMENT' then
-            'alter table '||sys.dbms_assert.enquote_name(X.lob_table_owner)||'.'||sys.dbms_assert.enquote_name(X.lob_table)||' move&<name = "online?" checkbox = " online," default = ""> lob ('||sys.dbms_assert.enquote_name(X.lob_column)||') store as '||sys.dbms_assert.enquote_name(X.segment_name)||' (tablespace '||X.tablespace_name||')'
+            'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move'
+                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                || ' lob ('||safe_enquote(X.lob_column)||') store as '||safe_enquote(X.segment_name)||' (tablespace '||safe_enquote(X.tablespace_name)||')'
         when X.segment_type = 'LOB PARTITION' then
-            'alter table '||sys.dbms_assert.enquote_name(X.lob_table_owner)||'.'||sys.dbms_assert.enquote_name(X.lob_table)||' move partition '||sys.dbms_assert.enquote_name(X.lob_table_partition)||'&<name = "online?" checkbox = " online," default = ""> lob ('||sys.dbms_assert.enquote_name(X.lob_column)||') store as (tablespace '||X.tablespace_name||')'
+            'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move partition '||safe_enquote(X.lob_table_partition)
+                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                || ' lob ('||safe_enquote(X.lob_column)||') store as (tablespace '||safe_enquote(X.tablespace_name)||')'
         when X.segment_type = 'LOB SUBPARTITION' then
-            'alter table '||sys.dbms_assert.enquote_name(X.lob_table_owner)||'.'||sys.dbms_assert.enquote_name(X.lob_table)||' move subpartition '||sys.dbms_assert.enquote_name(X.lob_table_subpartition)||'&<name = "online?" checkbox = " online," default = ""> lob ('||sys.dbms_assert.enquote_name(X.lob_column)||') store as (tablespace '||X.tablespace_name||')'
+            'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move subpartition '||safe_enquote(X.lob_table_subpartition)
+                || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
+                || ' lob ('||safe_enquote(X.lob_column)||') store as (tablespace '||safe_enquote(X.tablespace_name)||')'
         else
             '-- WARNING: Dunno how to move '||lower(X.segment_type)||' "'||X.owner||'"."'||X.segment_name||'"'
     end||';' as sql$move
