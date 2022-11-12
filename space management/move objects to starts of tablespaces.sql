@@ -6,7 +6,7 @@
  - tablespaces ideally are autoextensible, because objects sometimes get moved to an end of tbs; otherwise "ORA-01652: unable to extend temp segment by $1 in tablespace $2" gets thrown
  - occasionally, moving tables with RAW(2000), VARCHAR2(4000 byte) columns may throw "ORA-14691: Extended character types are not allowed in this table"; this is clearly a bug (checked on 19.16)
  - DON'T FORGET to purge recyclebin prior to moving objects!
-
+ - moving AQ tables makes their contained queues invalid; UTL_RECOMP recompilation usually helps
 ****************************************************************************************************
 prepare phase:
 
@@ -29,7 +29,6 @@ select X.*,
     'alter tablespace "'||tablespace_name||'$N_'||to_char(sysdate, 'yyyymmdd_hh24')||'" rename to "'||tablespace_name||'";' as sql$99_rename_new_to_old
 from xyz X
 where row$ <= 1
-    and tablespace_name = 'OWSTATLARGE_D'
 ;
 
 */
@@ -57,7 +56,6 @@ segs$ as (
         and owner not in ('XDB','SH','OE','IX','HR','PIERRE')
         and tablespace_name not like 'UNDO%'
         -- [in] list of tablespaces to be considered...
---        and tablespace_name = 'OWSTATLARGE_D'
     group by owner, segment_name, partition_name, segment_type, tablespace_name
 ),
 detect_all$ as (
@@ -212,8 +210,27 @@ sqls$ as (
         'alter user '||safe_enquote(C.owner)||' quota 0 on '||safe_enquote('&transientTablespaceName')||';' as sql$
     from (select unique owner from segs$) C
     where '&transientTablespaceName' is not null
+    --
+    union all
+    --
+    select
+        '92:leftovers in transient' as block$,
+        0 as cmd#,
+        q'{select count(1) as leftovers_in_transient_tbs from dba_segments where tablespace_name = '&transientTablespaceName';}' as sql$
+    from dual
+    where '&transientTablespaceName' is not null
+    --
+    union all
+    --
+    select
+        '02:leftovers in transient' as block$,
+        0 as cmd#,
+        q'{select count(1) as leftovers_in_transient_tbs from dba_segments where tablespace_name = '&transientTablespaceName';}' as sql$
+    from dual
+    where '&transientTablespaceName' is not null
 )
 select block$, cmd#, X.sql$||' -- '||row_number() over (order by block$, cmd#)||'/'||count(1) over ()
 from sqls$ X
 order by block$, cmd#
+/
 
