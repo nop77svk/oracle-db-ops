@@ -1,3 +1,10 @@
+select *
+from dba_objects X
+where lnnvl(status = 'VALID')
+;
+
+----------------------------------------------------------------------------------------------------
+
 declare
     c_threads           constant pls_integer := 4;
 begin
