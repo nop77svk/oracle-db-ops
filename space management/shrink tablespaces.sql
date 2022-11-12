@@ -27,7 +27,7 @@ df$ as (
     select --+ leading(C,X) no_merge(X) no_merge(T) use_hash(F,T)
         T.tablespace_name, T.file_name, T.file_id, X.last_block_id, T.block_size,
         T.current_file_size_mb, C.c_autoextend_mb,
-        greatest(C.c_autoextend_mb, nvl(T.extent_next_mb, C.c_autoextend_mb), nvl(T.data_file_next_mb, C.c_autoextend_mb)) as size_rounding_mb
+        greatest(C.c_absolute_min_mb, nvl(T.extent_next_mb, C.c_autoextend_mb), nvl(T.data_file_next_mb, C.c_autoextend_mb)) as size_rounding_mb
     from tbs$ T
         left join xt$ X
             on X.file_id = T.file_id
@@ -53,3 +53,4 @@ select --+ all_rows
     power(2, ceil(log(2, min_file_size_mb))) as max_size_mb,
     'alter database datafile '||file_id||' autoextend on maxsize '||power(2, ceil(log(2, min_file_size_mb)))||'m;' as sql$max_df
 from df_tgt$ X
+;
