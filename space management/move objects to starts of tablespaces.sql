@@ -50,7 +50,20 @@ with
 segs$ as (
     select owner, segment_name, partition_name, segment_type, tablespace_name,
         max(block_id) as last_block_id,
-        sum(bytes)/1048576 as size_mb
+        sum(bytes / 1048576) as size_mb,
+        least(
+            nvl(to_number('&maxDopForSingleMove'), 16),
+            greatest(
+                1,
+                round(log(
+                    2,
+                    sum(bytes / 1048576 / greatest(
+                        1,
+                        nvl(to_number('&maxMegabytesToSingleThread'), 64)
+                    ))
+                ))
+            )
+        ) as dop
     from dba_extents
     where tablespace_name not in ('SYSTEM','SYSAUX','TEMP','USERS')
         and owner not in ('XDB','SH','OE','IX','HR','PIERRE')
@@ -122,52 +135,64 @@ sql_templates$ as (
             when X.segment_type = 'TABLE' and X.partition_name is null then
                 'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move'
                     || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when X.dop > 1 then ' parallel '||X.dop end
                     || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
             when X.segment_type = 'NESTED TABLE' then
                 'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move'
                     || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when X.dop > 1 then ' parallel '||X.dop end
                     || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
             when X.segment_type = 'INDEX' and X.index_type = 'IOT - TOP' then
                 'alter table '||safe_enquote(X.index_table_owner)||'.'||safe_enquote(X.index_table)||' move'
                     || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when X.dop > 1 then ' parallel '||X.dop end
                     || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
             when X.segment_type = 'TABLE PARTITION' then
                 'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move partition '||safe_enquote(X.partition_name)
                     || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when X.dop > 1 then ' parallel '||X.dop end
                     || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
             when X.segment_type = 'TABLE SUBPARTITION' then
                 'alter table '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' move subpartition '||safe_enquote(X.partition_name)
                     || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when X.dop > 1 then ' parallel '||X.dop end
                     || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
             when X.segment_type = 'INDEX' and X.partition_name is null then
                 'alter index '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' rebuild'
                     || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
                     || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when X.dop > 1 then ' parallel '||X.dop end
                     || case when lower('&compute_statistics') in ('y','yes','true','t','1') then ' compute statistics' end
             when X.segment_type = 'INDEX PARTITION' then
                 'alter index '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' rebuild partition '||safe_enquote(X.partition_name)
                     || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
                     || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when X.dop > 1 then ' parallel '||X.dop end
                     || case when lower('&compute_statistics') in ('y','yes','true','t','1') then ' compute statistics' end
             when X.segment_type = 'INDEX SUBPARTITION' then
                 'alter index '||safe_enquote(X.owner)||'.'||safe_enquote(X.segment_name)||' rebuild subpartition '||safe_enquote(X.partition_name)
                     || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
                     || case when '&transientTablespaceName' is not null then ' tablespace ${tablespace}' end
+                    || case when X.dop > 1 then ' parallel '||X.dop end
                     || case when lower('&compute_statistics') in ('y','yes','true','t','1') then ' compute statistics' end
             when X.segment_type = 'LOBSEGMENT' and X.varray_table is not null then
                 'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move'
+                    || case when X.dop > 1 then ' parallel '||X.dop end
                     || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
                     || ' varray '||safe_enquote(X.lob_column)||' store as lob '||safe_enquote(X.segment_name)||' (tablespace ${tablespace})'
             when X.segment_type = 'LOBSEGMENT' then
                 'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move'
+                    || case when X.dop > 1 then ' parallel '||X.dop end
                     || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
                     || ' lob ('||safe_enquote(X.lob_column)||') store as '||safe_enquote(X.segment_name)||' (tablespace ${tablespace})'
             when X.segment_type = 'LOB PARTITION' then
                 'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move partition '||safe_enquote(X.lob_table_partition)
+                    || case when X.dop > 1 then ' parallel '||X.dop end
                     || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
                     || ' lob ('||safe_enquote(X.lob_column)||') store as (tablespace ${tablespace})'
             when X.segment_type = 'LOB SUBPARTITION' then
                 'alter table '||safe_enquote(X.lob_table_owner)||'.'||safe_enquote(X.lob_table)||' move subpartition '||safe_enquote(X.lob_table_subpartition)
+                    || case when X.dop > 1 then ' parallel '||X.dop end
                     || case when lower('&online') in ('y','yes','true','t','1') then ' online' end
                     || ' lob ('||safe_enquote(X.lob_column)||') store as (tablespace ${tablespace})'
             else
