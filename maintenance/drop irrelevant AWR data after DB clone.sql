@@ -74,6 +74,7 @@ where not exists (
             and WS.startup_time = WDI.startup_time
     );
 
+-- ORA-1 on RBHUST
 insert all
     when first_snap$ = 1 and lnnvl(is_already_in_wdi$ = 1) then
         into sys.wrm$_database_instance
@@ -174,6 +175,7 @@ begin
     for cv in (
         select dbid, count(1) as snaps#, min(snap_id) as min_snap_id, max(snap_id) as max_snap_id
         from dba_hist_snapshot
+        where dbid not in (select dbid from gv$database)
         group by dbid
     ) loop
         dbms_output.put_line('*** dbid '||cv.dbid);
@@ -245,4 +247,64 @@ end;
 /
 
 ----------------------------------------------------------------------------------------------------
+-- drop AWR data from other DBIDs
 
+declare
+    l_sql               varchar2(32767);
+    l_left_intact       integer := 0;
+begin
+    for cv in (
+        select owner, table_name, T.tablespace_name, TC.has_dbid, TC.has_instance_number, TC.has_snap_id, TC.has_startup_time
+        from dba_tables T
+            join (
+                select
+                    TC.owner, TC.table_name,
+                    count(case when TC.column_name = 'DBID' then 1 end) as has_dbid,
+                    count(case when TC.column_name = 'INSTANCE_NUMBER' then 1 end) as has_instance_number,
+                    count(case when TC.column_name = 'SNAP_ID' then 1 end) as has_snap_id,
+                    count(case when TC.column_name = 'STARTUP_TIME' then 1 end) as has_startup_time
+                from dba_tab_cols TC
+                group by TC.owner, TC.table_name
+            ) TC
+                using (owner, table_name)
+        where owner = 'SYS'
+            and table_name like 'WR_$%'
+--            and T.partitioned = 'NO'
+            and TC.has_dbid + TC.has_snap_id > 0
+            and (owner, table_name) not in (('SYS','WRM$_DATABASE_INSTANCE'),('SYS','WRM$_SNAPSHOT'))
+    ) loop
+        l_sql := '
+            delete from "'||sys.dbms_assert.simple_sql_name(cv.owner)||'"."'||sys.dbms_assert.simple_sql_name(cv.table_name)||'" T
+            where not exists (
+                select *
+                from sys.'||case
+                    when cv.has_snap_id > 0 then 'wrm$_snapshot'
+                    when cv.has_dbid > 0 then 'wrm$_database_instance'
+                    else '???'
+                end||' S
+                where 1 = 1
+                    and '||case when cv.has_dbid > 0 then 'S.dbid = T.dbid' else '1 = 1 -- no DBID predicate' end||'
+                    and '||case when cv.has_instance_number > 0 then 'S.instance_number = T.instance_number' else '1 = 1 -- no INSTANCE_NUMBER predicate' end||'
+                    and '||case when cv.has_snap_id > 0 then 'S.snap_id = T.snap_id' else '1 = 1 -- no SNAP_ID predicate' end||'
+                    and '||case when cv.has_startup_time > 0 then 'S.startup_time = T.startup_time' else '1 = 1 -- no STARTUP_TIME predicate' end||'
+                    and '||case when cv.has_dbid <= 0 and cv.has_snap_id <= 0 then 'null is not null' else 'null is null' end||'
+            )
+        ';
+        begin
+            execute immediate l_sql;
+
+            if sql%rowcount > 0 then
+                dbms_output.put_line(cv.owner||'.'||cv.table_name||': '||sql%rowcount||' rows deleted');
+            else
+                l_left_intact := l_left_intact + 1;
+            end if;
+        exception
+            when others then
+                dbms_output.put_line(l_sql);
+                raise;
+        end;
+    end loop;
+    
+    dbms_output.put_line(l_left_intact||' tables left intact');
+end;
+/
