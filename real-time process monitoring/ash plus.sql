@@ -8,7 +8,7 @@ with ash_plus$ as (
         ASH.sql_id, ASH.is_sqlid_current, ASH.sql_child_number, ASH.force_matching_signature,
         ASH.sql_opcode, ASH.sql_opname,
         ASH.top_level_sql_id, ASH.top_level_sql_opcode,
-        case when ASH.top_level_sql_id = ASH.sql_id then 'Y' else 'N' end as is_top_sql,
+        case when ASH.top_level_sql_id = ASH.sql_id then 'Y' else 'N' end as is_top_level,
         --
         ASH.sql_adaptive_plan_resolved, ASH.sql_full_plan_hash_value, ASH.sql_plan_hash_value,
         ASH.sql_plan_line_id, ASH.sql_plan_operation, ASH.sql_plan_options,
@@ -21,7 +21,10 @@ with ash_plus$ as (
         --
         ASH.qc_instance_id, ASH.qc_session_id, ASH.qc_session_serial#, ASH.px_flags,
         ASH.event, ASH.event_id, ASH.event#, ASH.seq#, ASH.p1text, ASH.p1, ASH.p2text, ASH.p2, ASH.p3text, ASH.p3,
-        ASH.wait_class, ASH.wait_class_id, ASH.wait_time, ASH.session_state, ASH.time_waited,
+        ASH.wait_class, ASH.wait_class_id,
+        round(ASH.wait_time/1000000, &roundTimeInSeconds) as wait_time_s,
+        ASH.session_state,
+        round(ASH.time_waited/1000000, &roundTimeInSeconds) as time_waited_s,
         ASH.blocking_session_status, ASH.blocking_session, ASH.blocking_session_serial#, ASH.blocking_inst_id, ASH.blocking_hangchain_info,
         --
         ASH.current_obj#, CO.owner as curr_obj_owner, CO.object_name as curr_obj_name, CO.object_type as curr_obj_type,
