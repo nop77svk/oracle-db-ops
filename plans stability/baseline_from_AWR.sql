@@ -58,15 +58,15 @@ begin
             raise_application_error(-20993, 'There is no SQL_ID "'||c_sql_id||'" in AWR', true);
     end;
 
-    for rec in (
+    for cv in (
         select plan_name, sql_handle
         from dba_sql_plan_baselines PB
         where origin like 'MANUAL%'
             and dbms_lob.compare(PB.sql_text, l_sql_text) = 0
     ) loop
         n := dbms_spm.alter_sql_plan_baseline(
-            sql_handle      => rec.sql_handle,
-            plan_name       => rec.plan_name,
+            sql_handle      => cv.sql_handle,
+            plan_name       => cv.plan_name,
             attribute_name  => 'description',
             attribute_value => c_baseline_desc||' SQL_ID = '||c_sql_id
         );

@@ -25,15 +25,15 @@ begin
             raise_application_error(-20991, 'There is no SQL_ID "'||c_sql_id||'" in AWR', true);
     end;
 
-    for rec in (
+    for cv in (
         select plan_name, sql_handle, description
         from dba_sql_plan_baselines PB
         where dbms_lob.compare(PB.sql_text, l_sql_text) = 0
     ) loop
-        dbms_output.put_line('Dropping plan baseline "'||rec.sql_handle||'" - '||rec.description);
+        dbms_output.put_line('Dropping plan baseline "'||cv.sql_handle||'" - '||cv.description);
         n := n + dbms_spm.drop_sql_plan_baseline(
-            sql_handle => rec.sql_handle,
-            plan_name => rec.plan_name
+            sql_handle => cv.sql_handle,
+            plan_name => cv.plan_name
         );
     end loop;
 
