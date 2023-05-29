@@ -1,23 +1,24 @@
-with xyz as (
+with lmd_raw$ as (
     select *
     from v$diag_trace_file_contents
     where trace_filename = 'MYORCL_lmd0_9999999.trc'
 --        and "TIMESTAMP" between timestamp'2023-05-29 11:20:00 Europe/Bratislava' and timestamp'2023-05-29 11:48:00 Europe/Bratislava'
-)
-select trace_filename, section#,
-    decode(first_value(cls)
-        over (
-            partition by trace_filename, session_id, serial#, con_uid, section#
-            order by line_number asc
-        ),
-        'GLOBAL_BLOCKERS_DUMP_START', 'blockers',
-        'GLOBAL_WAIT_FOR_GRAPH_HEADER', 'WFG',
-        '?'
-    ) as match_group,
-    deadlock_id, t_blocker_dump,
-    line_number, payload
-from xyz
-    match_recognize (
+),
+lmd_mined$ as (
+    select trace_filename, section#,
+        decode(first_value(cls)
+            over (
+                partition by trace_filename, session_id, serial#, con_uid, section#
+                order by line_number asc
+            ),
+            'GLOBAL_BLOCKERS_DUMP_START', 'blockers',
+            'GLOBAL_WAIT_FOR_GRAPH_HEADER', 'WFG',
+            '?'
+        ) as match_group,
+        deadlock_id, t_blocker_dump,
+        line_number, payload
+    from xyz
+        match_recognize (
             partition by trace_filename, session_id, serial#, con_uid
             order by line_number asc
             measures
@@ -59,4 +60,7 @@ from xyz
                     as function_name = 'kjddpgt'
                         and regexp_like(payload, '^\s*end\s+of\s+global\s+WFG\s+for\s+GES\s+deadlock', 'i')
         ) X
+)
+select *
+from lmd_mined$
 ;
