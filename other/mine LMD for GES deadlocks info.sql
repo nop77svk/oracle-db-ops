@@ -63,7 +63,32 @@ lmd_mined$ as (
                     as function_name = 'kjddpgt'
                         and regexp_like(payload, '^\s*end\s+of\s+global\s+WFG\s+for\s+GES\s+deadlock', 'i')
         ) X
+),
+deadlock_sessions$ as (
+    select *
+    from lmd_mined$
+        match_recognize (
+            partition by match_group, deadlock_id
+            order by line_number
+            measures
+                user_machine.payload_value as machine,
+                session_number.payload_value as session_id,
+                session_serial_num.payload_value as session_serial#,
+                inst_id.payload_value as inst_id
+            one row per match
+                after match skip past last row
+            pattern (
+                user_machine A*? session_number A*? session_serial_num A*? inst_id
+            )
+            define
+                user_machine as payload_var = 'User Machine',
+                session_number as payload_var = 'Session Number',
+                session_serial_num as payload_var = 'Session Serial Number',
+                inst_id as payload_var = 'Instance'
+        ) X
+    where match_group = 'WFG'
 )
 select *
 from lmd_mined$
+--from deadlock_sessions$
 ;
