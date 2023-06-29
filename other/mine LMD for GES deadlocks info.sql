@@ -5,7 +5,8 @@ with lmd_raw$ as (
 --        and "TIMESTAMP" between timestamp'2023-05-29 11:20:00 Europe/Bratislava' and timestamp'2023-05-29 11:48:00 Europe/Bratislava'
 ),
 lmd_mined$ as (
-    select trace_filename, section#,
+    select --+ no_merge
+        trace_filename, section#,
         decode(first_value(cls)
             over (
                 partition by trace_filename, session_id, serial#, con_uid, section#
@@ -16,7 +17,9 @@ lmd_mined$ as (
             '?'
         ) as match_group,
         deadlock_id, t_blocker_dump,
-        line_number, payload
+        line_number, payload,
+        regexp_substr(payload, '^\s*([^:]+?)\s*:\s*(.+?)\s*$', 1, 1, null, 1) as payload_var,
+        regexp_substr(payload, '^\s*([^:]+?)\s*:\s*(.+?)\s*$', 1, 1, null, 2) as payload_value
     from xyz
         match_recognize (
             partition by trace_filename, session_id, serial#, con_uid
