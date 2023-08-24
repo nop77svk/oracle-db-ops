@@ -1,7 +1,30 @@
-with ash_plus$ as (
+with ash_base$ as (
+    select ASH.*,
+        ASH.instance_number as inst_id,
+        cast(null as integer) as delta_read_mem_bytes
+--    from gv$active_session_history ASH
+    from dba_hist_active_sess_history ASH
+        join dba_hist_snapshot HS
+            on HS.snap_id = ASH.snap_id
+            and HS.dbid = ASH.dbid
+            and HS.instance_number = ASH.instance_number
+    where ASH.sample_time between timestamp'2023-05-11 12:59:00' and timestamp'2023-05-11 13:01:00'
+        and ASH.snap_id between 369897 and 369898
+),
+ash_plus$ as (
     select
-        ASH.inst_id, ASH.sample_id, ASH.sample_time, ASH.usecs_per_row, ASH.is_awr_sample,
-        ASH.session_id, ASH.session_serial#, ASH.session_type, ASH.flags,
+        ASH.session_id, ASH.session_serial#, ASH.inst_id,
+        ora_hash(
+            ASH.session_id||'+'||ASH.session_serial#
+                ||'+'||ASH.inst_id
+                ||'+'||ASH.user_id||'+'||ASH.machine||'+'||ASH.port
+                ||'+'||ASH.module||'+'||ASH.top_level_sql_id||'+'||ASH.plsql_entry_object_id
+                ||'+'||ASH.con_dbid||'+'||ASH.con_id
+                ||'+'||ASH.run$id
+        ) as run$part_key,
+        ASH.run$id, ASH.run$samples#,
+        ASH.sample_id, ASH.run$row#, ASH.sample_time,
+        ASH.usecs_per_row, ASH.session_type, ASH.flags,
         --
         ASH.user_id, U.username,
         --
@@ -19,12 +42,14 @@ with ash_plus$ as (
         ASH.plsql_object_id, ASH.plsql_subprogram_id,
         PP.owner as plsql_owner, PP.object_name as plsql_object, PP.procedure_name as plsql_procedure, PP.overload as plsql_overload,
         --
-        ASH.qc_instance_id, ASH.qc_session_id, ASH.qc_session_serial#, ASH.px_flags,
-        ASH.event, ASH.event_id, ASH.event#, ASH.seq#, ASH.p1text, ASH.p1, ASH.p2text, ASH.p2, ASH.p3text, ASH.p3,
-        ASH.wait_class, ASH.wait_class_id,
-        round(ASH.wait_time/1000000, 3) as wait_time_s,
-        ASH.session_state,
+        ASH.qc_instance_id, ASH.qc_session_id, ASH.qc_session_serial#, ASH.px_flags, ASH.session_state,
+        ASH.event_id, ASH.event,
         round(ASH.time_waited/1000000, 3) as time_waited_s,
+        round(ASH.run$time_waited/1000000, 3) as run$time_waited_s,
+        ASH.wait_class, ASH.wait_class_id,
+        ASH.p1text, ASH.p1, ASH.p2text, ASH.p2, ASH.p3text, ASH.p3,
+        round(ASH.wait_time/1000000, 3) as wait_time_s,
+        round(ASH.run$wait_time/1000000, 3) as run$wait_time_s,
         ASH.blocking_session_status, ASH.blocking_session, ASH.blocking_session_serial#, ASH.blocking_inst_id, ASH.blocking_hangchain_info,
         --
         ASH.current_obj#, CO.owner as curr_obj_owner, CO.object_name as curr_obj_name, CO.object_type as curr_obj_type,
@@ -57,8 +82,45 @@ with ash_plus$ as (
         round(ASH.temp_space_allocated/1048576, 1) as temp_space_allocated_mb,
         --
         ASH.con_dbid, ASH.con_id,
-        ASH.dbop_name, ASH.dbop_exec_id
-    from gv$active_session_history ASH
+        ASH.dbop_name, ASH.dbop_exec_id,
+        --
+        ASH.run$start_sample_id, ASH.run$end_sample_id, ASH.run$start_sample_time, ASH.run$end_sample_time,
+        ASH.run$end_sample_time - ASH.run$start_sample_time as run$total_time
+    from ash_base$
+            match_recognize (
+                partition by
+                    session_id, session_serial#,
+                    inst_id,
+                    user_id, machine, port,
+                    module,
+                    top_level_sql_id, plsql_entry_object_id,
+                    con_dbid, con_id
+                order by sample_id
+                measures
+                    match_number() as run$id,
+                    final count(1) as run$samples#,
+                    count(1) as run$row#,
+                    first(sample_id) as run$start_sample_id,
+                    final last(sample_id) as run$end_sample_id,
+                    first(sample_time) as run$start_sample_time,
+                    final last(sample_time) as run$end_sample_time,
+                    final sum(wait_time) as run$wait_time,
+                    final sum(time_waited) as run$time_waited
+                all rows per match
+                pattern (is_run_start is_continuous_run*)
+                define
+                    is_run_start as prev(sample_id) is null
+                        or xid != prev(xid)
+                        or xid is not null and prev(xid) is null
+                        or xid is null and prev(xid) is not null,
+                    is_continuous_run as
+                        first(xid) is not null
+                            and xid = prev(xid)
+                        or first(xid) is null
+                            and xid is null
+                            and sample_id > prev(sample_id)
+                            and sample_id <= prev(sample_id) + 10
+            ) ASH
         left join dba_users U
             on U.user_id = ASH.user_id
         left join dba_objects CO
