@@ -1,6 +1,6 @@
 with hqs$ as (
     select
-        HS.begin_interval_time,
+        HS.begin_interval_time_tz,
         row_number() over (partition by HQS.module, HQS.action, HQS.sql_id, HQS.plan_hash_value, trunc(HS.begin_interval_time, 'dd') order by HS.begin_interval_time desc) as row$,
         --
         HQS.snap_id, HQS.instance_number as inst_id,
