@@ -1,6 +1,7 @@
 declare
     -- BEGIN adjustments
     c_sql_id                        constant v$sql.sql_id%type := '5d3c63qhhgkyp';
+    c_baseline_desc                 constant dba_sql_plan_baselines.description%type := 'INC-xxxx fix';
     -- END adjustments
 
     n                               integer := 0;
@@ -29,6 +30,8 @@ begin
         select plan_name, sql_handle, description
         from dba_sql_plan_baselines PB
         where dbms_lob.compare(PB.sql_text, l_sql_text) = 0
+            or instr(PB.description, c_baseline_desc) > 0
+            or instr(PB.description, c_sql_id) > 0
     ) loop
         dbms_output.put_line('Dropping plan baseline "'||cv.sql_handle||'" - '||cv.description);
         n := n + dbms_spm.drop_sql_plan_baseline(
