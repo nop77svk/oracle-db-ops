@@ -23,11 +23,7 @@ begin
         from dba_hist_sqlstat
         where sql_id = c_sql_id
             and plan_hash_value = c_plan_hash_value
-            -- comment out the following line when dealing with databases copied/cloned from other databases
             and dbid = (select dbid from v$database)
-        order by
-            case when dbid = (select dbid from v$database) then 1 else 2 end,
-            snap_id desc
         fetch first 1 rows only;
     exception
         when no_data_found then
