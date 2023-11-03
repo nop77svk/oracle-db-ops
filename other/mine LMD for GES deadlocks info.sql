@@ -11,6 +11,8 @@ set pagesize 1024
 
 col match_group for a11
 col deadlock_id for a11
+alter session set nls_timestamp_format = 'yyyy-mm-dd hh24:mi:ss';
+alter session set nls_timestamp_tz_format = 'yyyy-mm-dd hh24:mi:ss tzh:tzm';
 col session_id for a10
 col session_serial# for a15
 col inst_id for a7
