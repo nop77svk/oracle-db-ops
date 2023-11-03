@@ -1,8 +1,8 @@
 set role all;
 
-define trace_file = 'RPCP1_lmd0_9831678.trc'
+define trace_file = 'ORCL1_lmd0_987654321.trc'
 --define since_tstamp = '2023-10-21 10:40:30 Europe/Bratislava'
-define since_tstamp = '2023-10-24 10:15:25 Europe/Bratislava'
+define since_tstamp = '2023-10-01 10:15:25 Europe/Bratislava'
 
 ---------------------------------------------------------------------------------------------------
  
