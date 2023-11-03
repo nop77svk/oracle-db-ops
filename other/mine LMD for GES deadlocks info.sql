@@ -1,13 +1,14 @@
 set role all;
 
-define trace_file = 'ORCL1_lmd0_987654321.trc'
+define trace_file = 'RPCP1_lmd0_9831678.trc'
 --define since_tstamp = '2023-10-21 10:40:30 Europe/Bratislava'
-define since_tstamp = '2023-10-01 10:15:25 Europe/Bratislava'
+define since_tstamp = '2023-10-24 10:15:25 Europe/Bratislava'
 
 ---------------------------------------------------------------------------------------------------
  
 set linesize 32767
 set pagesize 1024
+
 col match_group for a11
 col deadlock_id for a11
 col session_id for a10
@@ -186,7 +187,9 @@ where match_group = 'WFG'
 ;
 */
 select --+ leading(DS) use_hash(ASH) use_nl(CO,PEP,PP)
-    DS.deadlock_id, DS.session_id, DS.session_serial#, DS.inst_id,
+    DS.deadlock_id, ASH.sample_time,
+    --
+    DS.session_id, DS.session_serial#, DS.inst_id,
     nvl(ASH.module, DS.app_name) as module,
     nvl(ASH.action, DS.action) as action,
     nvl(ASH.program, DS.os_program) as program,
@@ -244,5 +247,5 @@ from deadlock_sessions$ DS
     left join dba_procedures PP
         on PP.object_id = ASH.plsql_object_id
         and PP.subprogram_id = ASH.plsql_subprogram_id
-order by DS.deadlock_id, DS.session_id, DS.inst_id
+order by ASH.sample_time, DS.deadlock_id, DS.session_id, DS.inst_id
 ;
