@@ -7,11 +7,12 @@ with snaps$ as (
         and HS.dbid = (select dbid from v$database)
 )
 select 'instance_'||instance_number||'.'||to_char(end_interval_time_tz, 'yyyymmdd_hh24miss')||'.html' as file_name,
-    X.*
+    AWR.*
 from snaps$ S
     cross apply table(dbms_workload_repository.awr_report_html(
         l_dbid => S.dbid,
         l_inst_num => S.instance_number,
         l_bid => S.snap_id - 1,
         l_eid => S.snap_id
-    )) X;
+    )) AWR
+;
