@@ -1,3 +1,8 @@
+-- [2do!] parametrisation...
+define tablespace_for_testing = fill_in_yours
+
+----------------------------------------------------------------------------------------------------
+
 drop sequence my_log_SEQ;
 drop table t_my_log purge;
 
@@ -15,7 +20,7 @@ create table t_my_log
   synch_tag        VARCHAR2(1),
   partition_key    VARCHAR2(32) default 'X'
 )
-tablespace users
+tablespace &&tablespace_for_testing
   pctfree 10
   initrans 1
   maxtrans 255
@@ -29,7 +34,7 @@ tablespace users
   );
 -- Create/Recreate indexes 
 create index my_log_DATE on t_my_log (MESSAGE_DATE, ID)
-  tablespace users
+  tablespace &&tablespace_for_testing
   pctfree 10
   initrans 2
   maxtrans 255
@@ -42,7 +47,7 @@ create index my_log_DATE on t_my_log (MESSAGE_DATE, ID)
     pctincrease 0
   );
 create index my_log_DESC on t_my_log (MESS_DICT__ID, MESSAGE_DATE, ID)
-  tablespace users
+  tablespace &&tablespace_for_testing
   pctfree 10
   initrans 6
   maxtrans 255
@@ -55,7 +60,7 @@ create index my_log_DESC on t_my_log (MESS_DICT__ID, MESSAGE_DATE, ID)
     pctincrease 0
   );
 create index my_log_LOG on t_my_log (PROCESS_LOG__OID, MESSAGE_DATE, ID)
-  tablespace users
+  tablespace &&tablespace_for_testing
   pctfree 10
   initrans 6
   maxtrans 255
@@ -68,7 +73,7 @@ create index my_log_LOG on t_my_log (PROCESS_LOG__OID, MESSAGE_DATE, ID)
     pctincrease 0
   );
 create index my_log_OBJ on t_my_log (DOC__ID, OBJECT_TYPE, ID)
-  tablespace users
+  tablespace &&tablespace_for_testing
   pctfree 10
   initrans 6
   maxtrans 255
@@ -84,7 +89,7 @@ create index my_log_OBJ on t_my_log (DOC__ID, OBJECT_TYPE, ID)
 alter table t_my_log
   add constraint PK_my_log primary key (ID)
   using index 
-  tablespace users
+  tablespace &&tablespace_for_testing
   pctfree 10
   initrans 2
   maxtrans 255

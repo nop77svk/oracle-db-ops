@@ -1,4 +1,23 @@
+create table t_sql_stats
+(
+    sql_id                          varchar2(32 byte) not null,
+    sql_child_no                    integer not null,
+    run_id                          integer not null,
+    stat_name                       varchar2(128 byte) not null,
+    constraint PK_sql_stats primary key (sql_id, run_id, stat_name),
+    stat_value_pre                  number,
+    stat_value_post                 number,
+    stat_value_diff                 number generated always as (stat_value_post - nvl(stat_value_pre, 0)),
+    inst_id                         integer not null,
+    con_id                          integer not null
+);
+
+--truncate table t_sql_stats drop storage;
+
+----------------------------------------------------------------------------------------------------
+
 declare
+    c_run_id                        t_sql_stats.run_id%type := 50;
     c_show_xplan                    constant boolean := false;
     l_sql_id                        v$session.prev_sql_id%type;
     l_child_no                      v$session.prev_child_number%type;
@@ -15,101 +34,104 @@ declare
     l_events_post                   arr_session_events;
     l_events_diff                   arr_session_events;
     
-    cursor cur_sql_stats
-        ( i_sql_id                      in varchar2
+    procedure save_stats_pre
+        ( i_run_id                      in integer
+        , i_sql_id                      in varchar2
         , i_child_no                    in integer )
     is
-        select sql_id, inst_id, con_id,
-            lower(stat_name) as stat_name, stat_value
+        pragma autonomous_transaction;
+    begin
+        delete from t_sql_stats
+        where run_id = i_run_id
+            and sql_id = i_sql_id
+        ;
+        
+        insert into t_sql_stats
+            ( sql_id, sql_child_no, run_id,
+            stat_name, stat_value_pre,
+            inst_id, con_id )
+        select sql_id, child_number, i_run_id,
+            lower(stat_name) as stat_name, stat_value,
+            inst_id, con_id
         from gv$sql
             unpivot include nulls (
                 stat_value for stat_name in (
-                    elapsed_time, 
-                    cpu_time, 
-                    --
-                    loads, 
-                    invalidations, 
-                    parse_calls, 
-                    executions, 
-                    avoided_executions, 
-                    px_servers_executions, 
-                    fetches, 
-                    end_of_fetch_count, 
-                    rows_processed, 
-                    --
-                    users_opening, 
-                    users_executing, 
-                    --
-                    open_versions, 
-                    loaded_versions, 
-                    kept_versions, 
-                    serializable_aborts, 
-                    --
+                    elapsed_time, cpu_time, 
+                    loads, invalidations, parse_calls, executions, avoided_executions, px_servers_executions, fetches, end_of_fetch_count, rows_processed,
+                    users_opening, users_executing, 
+                    open_versions, loaded_versions, kept_versions, serializable_aborts, 
                     child_latch, 
-                    --
-                    im_scans, 
-                    im_scan_bytes_inmemory, 
-                    im_scan_bytes_uncompressed, 
-                    --
-                    buffer_gets, 
-                    disk_reads, 
-                    direct_reads, 
-                    direct_writes, 
-                    sorts, 
-                    --
-                    physical_write_requests, 
-                    physical_write_bytes, 
-                    physical_read_requests, 
-                    physical_read_bytes, 
-                    optimized_phy_read_requests, 
-                    --
-                    locked_total, 
-                    pinned_total, 
-                    --
-                    io_interconnect_bytes, 
-                    io_cell_uncompressed_bytes, 
-                    io_cell_offload_returned_bytes, 
-                    io_cell_offload_eligible_bytes, 
-                    --
-                    sharable_mem, 
-                    persistent_mem, 
-                    runtime_mem,
-                    typecheck_mem, 
-                    --
-                    application_wait_time, 
-                    concurrency_wait_time, 
-                    user_io_wait_time, 
-                    cluster_wait_time, 
-                    plsql_exec_time, 
-                    java_exec_time
+                    im_scans, im_scan_bytes_inmemory, im_scan_bytes_uncompressed, 
+                    buffer_gets, disk_reads, direct_reads, direct_writes, sorts, 
+                    physical_write_requests, physical_write_bytes, physical_read_requests, physical_read_bytes, optimized_phy_read_requests, 
+                    locked_total, pinned_total, 
+                    io_interconnect_bytes, io_cell_uncompressed_bytes, io_cell_offload_returned_bytes, io_cell_offload_eligible_bytes, 
+                    sharable_mem, persistent_mem, runtime_mem, typecheck_mem,
+                    application_wait_time, concurrency_wait_time, user_io_wait_time, cluster_wait_time, plsql_exec_time, java_exec_time
                 )
             )
         where sql_id = i_sql_id
             and child_number = i_child_no
         ;
+        
+        commit;
+    exception
+        when others then
+            rollback;
+            raise;
+    end;
 
-    subtype rec_sql_stat            is cur_sql_stats%rowtype;
-    subtype typ_sql_stat_ix         is varchar2(1024);
-    type arr_sql_stat               is table of rec_sql_stat index by typ_sql_stat_ix;
-    l_stats_pre                     arr_sql_stat;
-    l_stats_post                    arr_sql_stat;
-    l_stats_diff                    arr_sql_stat;
-    l_stat_ix                       typ_sql_stat_ix;
-
-    function get_sql_id_stats
-        ( i_sql_id                      in gv$sql.sql_id%type
-        , i_child_no                    in gv$sql.child_number%type )
-        return arr_sql_stat
+    procedure save_stats_post
+        ( i_run_id                      in integer
+        , i_sql_id                      in varchar2
+        , i_child_no                    in integer )
     is
-        l_result                        arr_sql_stat;
-        l_ix                            typ_sql_stat_ix;
+        pragma autonomous_transaction;
     begin
-        for cv in cur_sql_stats(i_sql_id, i_child_no) loop
-            l_ix := cv.stat_name||'|'||cv.sql_id||'|'||cv.inst_id||'|'||cv.con_id;
-            l_result(l_ix) := cv;
-        end loop;
-
-        return l_result;
+        merge into t_sql_stats T
+        using (
+            select sql_id, child_number,
+                lower(stat_name) as stat_name, stat_value,
+                inst_id, con_id
+            from gv$sql
+                unpivot include nulls (
+                    stat_value for stat_name in (
+                        elapsed_time, cpu_time, 
+                        loads, invalidations, parse_calls, executions, avoided_executions, px_servers_executions, fetches, end_of_fetch_count, rows_processed,
+                        users_opening, users_executing, 
+                        open_versions, loaded_versions, kept_versions, serializable_aborts, 
+                        child_latch, 
+                        im_scans, im_scan_bytes_inmemory, im_scan_bytes_uncompressed, 
+                        buffer_gets, disk_reads, direct_reads, direct_writes, sorts, 
+                        physical_write_requests, physical_write_bytes, physical_read_requests, physical_read_bytes, optimized_phy_read_requests, 
+                        locked_total, pinned_total, 
+                        io_interconnect_bytes, io_cell_uncompressed_bytes, io_cell_offload_returned_bytes, io_cell_offload_eligible_bytes, 
+                        sharable_mem, persistent_mem, runtime_mem, typecheck_mem,
+                        application_wait_time, concurrency_wait_time, user_io_wait_time, cluster_wait_time, plsql_exec_time, java_exec_time
+                    )
+                )
+            where sql_id = i_sql_id
+                and child_number = i_child_no
+        ) S
+        on ( T.sql_id = S.sql_id
+            and T.run_id = i_run_id
+            and T.stat_name = S.stat_name )
+        when matched then
+            update
+            set T.stat_value_post = S.stat_value
+        when not matched then
+            insert ( sql_id, sql_child_no, run_id,
+                stat_name, stat_value_post,
+                inst_id, con_id
+            ) values ( S.sql_id, S.child_number, i_run_id,
+                S.stat_name, S.stat_value,
+                S.inst_id, S.con_id
+            );
+        commit;
+    exception
+        when others then
+            rollback;
+            raise;
     end;
     
     function get_session_events
@@ -138,12 +160,28 @@ declare
     is
     begin
         execute immediate 'truncate table t_my_log drop storage';
+        
+        insert --+ append
+            into t_my_log (id, process_log__oid, object_type, doc__id, message_date, mess_dict__id, message_type, message_name, synch_tag, partition_key)
+        select -rownum, rownum,
+            case when mod(rownum, 100) = 17 then 'DOC' end,
+            rownum,
+            date'2022-01-01' + rownum / 24 / 60 / 5,
+            case when mod(rownum, 100) = 17 then rownum end,
+            decode(mod(rownum, 3), 0, 'I', 1, 'W', 2, 'E'),
+            'archive_'||rownum,
+            null,
+            'X'
+        from dual
+        connect by level <= 2000000;
+        
+        commit;
     end;
     
     procedure execute_test
     is
         c_iterations                    constant integer := 1000000;
-        l_my_log                  t_my_log%rowtype;
+        l_my_log                        t_my_log%rowtype;
     begin
         for i in 1..c_iterations loop
             l_my_log := null;
@@ -165,15 +203,12 @@ declare
             
             insert into t_my_log values l_my_log;
             
-            if i = 1 then
+            if i = 1 and l_sql_id is null then
                 select prev_sql_id, prev_child_number into l_sql_id, l_child_no from v$session where sid = sys_context('userenv','sid');
-                if l_stats_pre.count() <= 0 then
-                    l_stats_pre := get_sql_id_stats(l_sql_id, l_child_no);
-                end if;
+                save_stats_pre(c_run_id, l_sql_id, l_child_no);
             end if;
-
-            commit;
         end loop;
+        commit;
     end;
     
     procedure execute_test_teardown
@@ -250,8 +285,7 @@ begin
     l_events_post := l_events_pre;
     
     if l_sql_id is not null then
-        l_stats_pre := get_sql_id_stats(l_sql_id, l_child_no);
-        l_stats_post := l_stats_pre;
+        save_stats_pre(c_run_id, l_sql_id, l_child_no);
     end if;
 
     if c_show_xplan then
@@ -270,8 +304,8 @@ begin
     if c_show_xplan then
         select prev_sql_id, prev_child_number into l_sql_id, l_child_no from v$session where sid = sys_context('userenv','sid');
     end if;
-    
-    l_stats_post := get_sql_id_stats(l_sql_id, l_child_no);
+
+    save_stats_post(c_run_id, l_sql_id, l_child_no);
     l_events_post := get_session_events(to_number(sys_context('userenv', 'sid')));
 
     ------------------------------------------------------------------------------------------------
@@ -290,22 +324,12 @@ begin
     end loop;
     
     ------------------------------------------------------------------------------------------------
-    
-    l_stat_ix := l_stats_post.first();
-    <<iterate_l_stats_post>>
-    while l_stat_ix is not null loop
-        l_stats_diff(l_stat_ix) := l_stats_post(l_stat_ix);
-        if l_stats_pre.exists(l_stat_ix) then
-            l_stats_diff(l_stat_ix).stat_value := l_stats_post(l_stat_ix).stat_value - l_stats_pre(l_stat_ix).stat_value;
-        end if;
-        l_stat_ix := l_stats_post.next(l_stat_ix);
-    end loop iterate_l_stats_post;
 
     dbms_output.put_line('================================================================================================');
     dbms_output.put_line('SUMMARY OF GV$SQL STATS FOR THIS QUERY ('''||l_sql_id||''', '||l_child_no||')');
     dbms_output.put_line('================================================================================================');
     dbms_output.put_line(null);
-    
+
     show_table_hrow(sys.ora_mining_number_nt(30, 32, 4, 4));
     show_table_data(
         i_column_widths => sys.ora_mining_number_nt(30, 32, 4, 4),
@@ -313,23 +337,24 @@ begin
     );
     show_table_hrow(sys.ora_mining_number_nt(30, 32, 4, 4));
 
-    l_stat_ix := l_stats_diff.first();
-    <<iterate_l_stats_diff>>
-    while l_stat_ix is not null loop
-        if l_stats_diff(l_stat_ix).stat_value != 0 then
-            show_table_data(
-                i_column_widths => sys.ora_mining_number_nt(30, 32, 4, 4),
-                i_values => sys.ora_mining_varchar2_nt(
-                    l_stats_diff(l_stat_ix).stat_name,
-                    l_stats_diff(l_stat_ix).stat_value,
-                    l_stats_diff(l_stat_ix).con_id,
-                    l_stats_diff(l_stat_ix).inst_id
-                ),
-                i_align => sys.ora_mining_number_nt(-1, 1, 1, 1)
-            );
-        end if;
-
-        l_stat_ix := l_stats_diff.next(l_stat_ix);
+    for cv in (
+        select *
+        from t_sql_stats
+        where sql_id = l_sql_id
+            and run_id = c_run_id
+            and stat_value_diff != 0
+        order by stat_name collate binary_ai
+    ) loop
+        show_table_data(
+            i_column_widths => sys.ora_mining_number_nt(30, 32, 4, 4),
+            i_values => sys.ora_mining_varchar2_nt(
+                cv.stat_name,
+                cv.stat_value_diff,
+                cv.con_id,
+                cv.inst_id
+            ),
+            i_align => sys.ora_mining_number_nt(-1, 1, 1, 1)
+        );
     end loop iterate_l_stats_diff;
 
     show_table_hrow(sys.ora_mining_number_nt(30, 32, 4, 4));
