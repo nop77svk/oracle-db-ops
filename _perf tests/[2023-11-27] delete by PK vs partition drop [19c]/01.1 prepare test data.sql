@@ -29,16 +29,6 @@ create index i_index_test$32_8_2_1 on t_index_test (col_32, col_8, col_2, col_1,
 
 ----------------------------------------------------------------------------------------------------
 
-insert --+ append
-    into t_index_test (id, col_1, col_2, col_8, col_32)
-select rownum, dbms_random.string('x', 1), dbms_random.string('x', 2), dbms_random.string('x', 8), dbms_random.string('x', 32)
-from xmltable('1 to 2500000')
-;
-
-commit;
-
-----------------------------------------------------------------------------------------------------
-
 /*
 investigate difference in LIOs between
    a, row-by-row deletes
