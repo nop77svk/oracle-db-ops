@@ -7,7 +7,7 @@ truncate table t_session_events drop storage;
 ----------------------------------------------------------------------------------------------------
 
 declare
-    c_run_id_list                   constant sys.ora_mining_number_nt := sys.ora_mining_number_nt(/*10, 11, 12, 13, 20, 21, 22, 23, 30, 31, 32, 33,*/ 40, 41, 42, 43, 44, 45, 46, 47, 48, 49);
+    c_run_id_list                   constant sys.ora_mining_number_nt := sys.ora_mining_number_nt(10, 11, 12, 13, 20, 21, 22, 23, 30, 31, 32, 33, 40, 41, 42, 43, 44);
     l_run_ix                        pls_integer;
 
     c_show_xplan                    constant boolean := false;
@@ -109,11 +109,11 @@ declare
             ) loop
                 if cv.partition_position = 1 then
                     execute immediate 'alter table t_index_test truncate partition "'||sys.dbms_assert.simple_sql_name(cv.partition_name)||'" drop storage update indexes';
+                    dbms_output.put_line('run '||c_run_id||': partition '||cv.partition_name||' truncated');
                 else
                     execute immediate 'alter table t_index_test drop partition "'||sys.dbms_assert.simple_sql_name(cv.partition_name)||'" update indexes';
+                    dbms_output.put_line('run '||c_run_id||': partition '||cv.partition_name||' dropped');
                 end if;
-
-                dbms_output.put_line('run '||c_run_id||': partition '||cv.partition_name||' dropped');
             end loop;
 
             -- delete the rest
