@@ -7,7 +7,7 @@ truncate table t_session_events drop storage;
 ----------------------------------------------------------------------------------------------------
 
 declare
-    c_run_id_list                   constant sys.ora_mining_number_nt := sys.ora_mining_number_nt(10, 11, 12, 13, 20, 21, 22, 23, 30, 31, 32, 33, 40, 41, 42, 43, 44);
+    c_run_id_list                   constant sys.ora_mining_number_nt := sys.ora_mining_number_nt(/*10, 11, 12, 13, 20, 21, 22, 23, 30, 31, 32, 33,*/ 40, 41, 42, 43, 44, 50, 51, 52, 53, 54);
     l_run_ix                        pls_integer;
 
     c_show_xplan                    constant boolean := false;
@@ -19,12 +19,24 @@ declare
     c_rows_to_delete                constant integer := c_rows_to_insert_sqrt * c_rows_to_insert_sqrt / 3;
 
     l_sql_id                        v$session.prev_sql_id%type;
+    l_sql                           varchar2(32767);
     l_child_no                      v$session.prev_child_number%type;
     c_run_id                        integer;
-    c_module                        constant dbms_id := '2023-12-05.mass_delete_bench.'||to_char(sysdate, 'hh24-mi-ss');
+    c_module                        constant dbms_id := '2023-12-06.mass_delete_bench.'||to_char(sysdate, 'hh24-mi-ss');
 
     l_session_par_name              dbms_sql.varchar2s;
     l_session_par_value             dbms_sql.varchar2a;
+    
+    procedure safe_exec_sql(i_sql in varchar2)
+    is
+    begin
+        execute immediate i_sql;
+    exception
+        when others then
+            dbms_output.put_line('ERROR IN SQL:');
+            dbms_output.put_line(i_sql);
+            raise;
+    end;
 
     --============================================================================================--
     -- note: contents of the following routines are completely up to tester's decision
@@ -32,7 +44,7 @@ declare
     procedure execute_test_startup
     is
     begin
-        execute immediate 'truncate table t_index_test drop storage';
+        safe_exec_sql('truncate table t_index_test drop storage');
 
         insert --+ append
             into t_index_test (id, col_1, col_2, col_8, col_32)
@@ -108,10 +120,10 @@ declare
                 order by partition_position
             ) loop
                 if cv.partition_position = 1 then
-                    execute immediate 'alter table t_index_test truncate partition "'||sys.dbms_assert.simple_sql_name(cv.partition_name)||'" drop storage update indexes';
+                    safe_exec_sql('alter table t_index_test truncate partition "'||sys.dbms_assert.simple_sql_name(cv.partition_name)||'" drop storage update indexes');
                     dbms_output.put_line('run '||c_run_id||': partition '||cv.partition_name||' truncated');
                 else
-                    execute immediate 'alter table t_index_test drop partition "'||sys.dbms_assert.simple_sql_name(cv.partition_name)||'" update indexes';
+                    safe_exec_sql('alter table t_index_test drop partition "'||sys.dbms_assert.simple_sql_name(cv.partition_name)||'" update indexes');
                     dbms_output.put_line('run '||c_run_id||': partition '||cv.partition_name||' dropped');
                 end if;
             end loop;
@@ -126,6 +138,54 @@ declare
                 save_sql_stats_pre(c_run_id, l_sql_id, l_child_no);
             end if;
 */
+
+        elsif c_run_id >= 50 and c_run_id < 60 then
+            for cv in (
+                with partitions$ as (
+                    select X.*,
+                        length(X.partition_name) as part_name_len,
+                        row_number() over (order by partition_position desc) as partition_position_desc
+                    from xmltable('/ROWSET/ROW'
+                            passing dbms_xmlgen.getXmlType(q'{
+                                select partition_name, partition_position, high_value
+                                from dba_tab_partitions
+                                where table_name = 'T_INDEX_TEST'
+                            }')
+                            columns
+                                partition_name          varchar2(128),
+                                partition_position      integer,
+                                high_value              number
+                        ) X
+                    where X.high_value < c_rows_to_delete
+                )
+                select part_group, listagg('"'||partition_name||'"', ', ') within group (order by partition_position) as part_list
+                from partitions$
+                    match_recognize (
+                        order by partition_position
+                        measures match_number() as part_group
+                        all rows per match
+                        after match skip past last row
+                        pattern ( first_part | parts_up_to_4000_chars* )
+                        define
+                            first_part as partition_position = 1,
+                            parts_up_to_4000_chars as partition_position > 1
+                                and sum(part_name_len + 2) + (sum(2) - 2) <= 3800
+                    )
+                group by part_group
+            ) loop
+                if cv.part_group = 1 then
+                    safe_exec_sql('alter table t_index_test truncate partitions '||cv.part_list||' drop storage update indexes');
+                    dbms_output.put_line('run '||c_run_id||': partitions '||cv.part_list||' truncated');
+                else
+                    safe_exec_sql('alter table t_index_test drop partitions '||cv.part_list||' update indexes');
+                    dbms_output.put_line('run '||c_run_id||': partitions '||cv.part_list||' dropped');
+                end if;
+            end loop;
+
+            -- delete the rest
+            delete from t_index_test where id between 1 and c_rows_to_delete;
+            dbms_output.put_line('run '||c_run_id||': '||sql%rowcount||' rows deleted');
+            commit;
         else
             dbms_output.put_line('run '||c_run_id||': ELSE branch hit!');
         end if;
@@ -135,7 +195,7 @@ declare
     is
     begin
         rollback;
-        execute immediate 'truncate table t_index_test drop storage';
+        safe_exec_sql('truncate table t_index_test drop storage');
     end;
 
     --============================================================================================--
@@ -159,9 +219,9 @@ begin
             ------------------------------------------------------------------------------------------------
 
             if c_show_xplan then
-                execute immediate 'alter session set statistics_level = ALL';
-                execute immediate 'alter session set nls_comp = binary';
-                execute immediate 'alter session set nls_sort = binary';
+                safe_exec_sql('alter session set statistics_level = ALL');
+                safe_exec_sql('alter session set nls_comp = binary');
+                safe_exec_sql('alter session set nls_sort = binary');
             end if;
 
             if c_gather_session_events then
@@ -219,7 +279,7 @@ begin
             end if;
 
             for i in 1..l_session_par_name.count loop
-                execute immediate 'alter session set '||l_session_par_name(i)||' = '||l_session_par_value(i);
+                safe_exec_sql('alter session set '||l_session_par_name(i)||' = '||nvl(l_session_par_value(i), 'null'));
             end loop;
 
             ------------------------------------------------------------------------------------------------
@@ -234,7 +294,7 @@ begin
     end if;
 
     for i in 1..l_session_par_name.count loop
-        execute immediate 'alter session set '||l_session_par_name(i)||' = '||l_session_par_value(i);
+        safe_exec_sql('alter session set '||l_session_par_name(i)||' = '||nvl(l_session_par_value(i), 'null'));
     end loop;
 
     dbms_application_info.set_module(null, null);
