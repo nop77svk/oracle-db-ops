@@ -7,7 +7,7 @@ truncate table t_session_events drop storage;
 ----------------------------------------------------------------------------------------------------
 
 declare
-    c_run_id_list                   constant sys.ora_mining_number_nt := sys.ora_mining_number_nt(/*10, 11, 12, 13, 20, 21, 22, 23, 30, 31, 32, 33,*/ 40, 41, 42, 43, 44, 50, 51, 52, 53, 54);
+    c_run_id_list                   constant sys.ora_mining_number_nt := sys.ora_mining_number_nt(10, 11, 12, 13, 14, 20, 21, 22, 23, 24, 30, 31, 32, 33, 34, 40, 41, 42, 43, 44, 50, 51, 52, 53, 54);
     l_run_ix                        pls_integer;
 
     c_show_xplan                    constant boolean := false;
@@ -15,8 +15,8 @@ declare
     c_gather_session_stats          constant boolean := true;
     c_gather_session_events         constant boolean := true;
 
-    c_rows_to_insert_sqrt           constant integer := 1000;
-    c_rows_to_delete                constant integer := c_rows_to_insert_sqrt * c_rows_to_insert_sqrt / 3;
+    c_rows_to_insert_sqrt           constant integer := 1000; -- note: insert 1000x1000 rows first
+    c_rows_to_delete                constant integer := c_rows_to_insert_sqrt * c_rows_to_insert_sqrt / 3; -- note: benchmark deletion of 1/3 of them later
 
     l_sql_id                        v$session.prev_sql_id%type;
     l_sql                           varchar2(32767);
